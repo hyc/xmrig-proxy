@@ -155,6 +155,7 @@ void Client::setPool(const Pool &pool)
     }
 
     m_pool = pool;
+	m_daemon = pool.isDaemon();
 }
 
 
@@ -615,15 +616,19 @@ void Client::login()
 
     Document doc(kObjectType);
     auto &allocator = doc.GetAllocator();
+	Value params(kObjectType);
 
     doc.AddMember("id",      1,       allocator);
     doc.AddMember("jsonrpc", "2.0",   allocator);
-    doc.AddMember("method",  "login", allocator);
 
-    Value params(kObjectType);
-    params.AddMember("login", StringRef(m_pool.user()),     allocator);
-    params.AddMember("pass",  StringRef(m_pool.password()), allocator);
-    params.AddMember("agent", StringRef(m_agent),           allocator);
+	if (m_daemon) {
+	} else {
+		doc.AddMember("method",  "login", allocator);
+
+		params.AddMember("login", StringRef(m_pool.user()),     allocator);
+		params.AddMember("pass",  StringRef(m_pool.password()), allocator);
+		params.AddMember("agent", StringRef(m_agent),           allocator);
+	}
 
     if (m_pool.rigId()) {
         params.AddMember("rigid", StringRef(m_pool.rigId()), allocator);

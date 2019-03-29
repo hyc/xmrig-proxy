@@ -56,6 +56,7 @@ public:
     inline bool isNicehash() const                      { return m_nicehash; }
     inline bool isTLS() const                           { return m_tls; }
     inline bool isValid() const                         { return !m_host.isNull() && m_port > 0; }
+    inline bool isDaemon() const                        { return m_daemon; }
     inline const char *fingerprint() const              { return m_fingerprint.data(); }
     inline const char *host() const                     { return m_host.data(); }
     inline const char *password() const                 { return !m_password.isNull() ? m_password.data() : kDefaultPassword; }
@@ -98,6 +99,7 @@ private:
 
     bool m_nicehash;
     bool m_tls;
+	bool m_daemon;
     int m_keepAlive;
     uint16_t m_port;
     xmrig::Algorithm m_algorithm;

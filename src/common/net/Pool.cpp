@@ -47,6 +47,7 @@
 Pool::Pool() :
     m_nicehash(false),
     m_tls(false),
+    m_daemon(false),
     m_keepAlive(0),
     m_port(kDefaultPort)
 {
@@ -67,6 +68,7 @@ Pool::Pool() :
 Pool::Pool(const char *url) :
     m_nicehash(false),
     m_tls(false),
+    m_daemon(false),
     m_keepAlive(0),
     m_port(kDefaultPort)
 {
@@ -77,6 +79,7 @@ Pool::Pool(const char *url) :
 Pool::Pool(const char *host, uint16_t port, const char *user, const char *password, int keepAlive, bool nicehash, bool tls) :
     m_nicehash(nicehash),
     m_tls(tls),
+    m_daemon(false),
     m_keepAlive(keepAlive),
     m_port(port),
     m_host(host),
@@ -139,17 +142,24 @@ bool Pool::parse(const char *url)
     const char *base = url;
 
     if (p) {
-        if (strncasecmp(url, "stratum+tcp://", 14) == 0) {
-            m_tls = false;
-        }
-        else if (strncasecmp(url, "stratum+ssl://", 14) == 0) {
-            m_tls = true;
-        }
+		if (strncasecmp(url, "stratum+", 8) == 0) {
+			if (p-url != 11)
+				return false;
+		} else if (strncasecmp(url, "daemon+",7) == 0) {
+			if (p-url != 10)
+				return false;
+			m_daemon = true;
+		}
+		if (strncasecmp(p-3, "tcp:", 4) == 0) {
+			m_tls = false;
+		} else if (strncasecmp(p-3, "ssl:", 4) == 0) {
+			m_tls = true;
+		}
         else {
             return false;
         }
 
-        base = url + 14;
+        base = p+4;
     }
 
     if (!strlen(base) || *base == '/') {

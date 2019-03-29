@@ -138,6 +138,7 @@ private:
     bool m_ipv6;
     bool m_nicehash;
     bool m_quiet;
+	bool m_daemon;
     char m_buf[kInputBufferSize];
     char m_ip[46];
     char m_sendBuf[2048];
