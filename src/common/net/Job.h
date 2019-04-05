@@ -49,6 +49,8 @@ public:
     bool isEqual(const Job &other) const;
     bool setBlob(const char *blob);
     bool setTarget(const char *target);
+    bool setDiff(const char *diff);
+    bool setDaemonBlob(const char *blob);
     void setAlgorithm(const char *algo);
     void setHeight(uint64_t height);
 
@@ -57,12 +59,15 @@ public:
     inline bool setId(const char *id)                 { return m_id.setId(id); }
     inline const uint32_t *nonce() const              { return reinterpret_cast<const uint32_t*>(m_blob + 39); }
     inline const uint8_t *blob() const                { return m_blob; }
+    inline const char *daemonBlob() const             { return m_daemonBlob; }
+    inline char *daemonNonce() const                  { return m_daemonNonce; }
     inline const xmrig::Algorithm &algorithm() const  { return m_algorithm; }
     inline const xmrig::Id &clientId() const          { return m_clientId; }
     inline const xmrig::Id &id() const                { return m_id; }
     inline int poolId() const                         { return m_poolId; }
     inline int threadId() const                       { return m_threadId; }
     inline size_t size() const                        { return m_size; }
+    inline size_t daemonBlobSize() const              { return m_daemonBlobSize; }
     inline uint32_t *nonce()                          { return reinterpret_cast<uint32_t*>(m_blob + 39); }
     inline uint32_t diff() const                      { return static_cast<uint32_t>(m_diff); }
     inline uint64_t target() const                    { return m_target; }
@@ -98,6 +103,7 @@ private:
     bool m_nicehash;
     int m_poolId;
     int m_threadId;
+    int m_daemonPoll;
     size_t m_size;
     uint64_t m_diff;
     uint64_t m_target;
@@ -111,6 +117,9 @@ private:
     char m_rawBlob[kMaxBlobSize * 2 + 8];
     char m_rawTarget[24];
 #   endif
+    char *m_daemonBlob;
+    char *m_daemonNonce;
+    size_t m_daemonBlobSize;
 };
 
 #endif /* XMRIG_JOB_H */

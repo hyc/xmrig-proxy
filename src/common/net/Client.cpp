@@ -83,6 +83,7 @@ Client::Client(int id, const char *agent, IClientListener *listener) :
     m_expire(0),
     m_jobs(0),
     m_keepAlive(0),
+    m_daemonPoll(0),
     m_key(0),
     m_stream(nullptr),
     m_socket(nullptr)
@@ -155,7 +156,7 @@ void Client::setPool(const Pool &pool)
     }
 
     m_pool = pool;
-	m_daemon = pool.isDaemon();
+    m_daemon = pool.isDaemon();
 }
 
 
@@ -168,6 +169,9 @@ void Client::tick(uint64_t now)
         }
         else if (m_keepAlive && now > m_keepAlive) {
             ping();
+        }
+        if (m_daemonPoll && now > m_daemonPoll) {
+            send((char *)"GET /getheight HTTP/1.0\r\n", sizeof("GET /getheight HTTP/1.0\r\n")-1);
         }
     }
 
@@ -221,6 +225,11 @@ int64_t Client::submit(const JobResult &result)
 
     if (m_job.algorithm().variant() == xmrig::VARIANT_WOW && m_job.id() != result.jobId) {
         return -1;
+    }
+
+    if (m_daemon) {
+        Job::toHex(reinterpret_cast<const unsigned char*>(&result.nonce), 4, m_job.daemonNonce());
+        return send((char *)m_job.daemonBlob(), m_job.daemonBlobSize());
     }
 
     using namespace rapidjson;
@@ -329,33 +338,53 @@ bool Client::parseJob(const rapidjson::Value &params, int *code)
 
     Job job(m_id, m_nicehash, m_pool.algorithm(), m_rpcId);
 
-    if (!job.setId(params["job_id"].GetString())) {
-        *code = 3;
-        return false;
-    }
-
-    if (!job.setBlob(params["blob"].GetString())) {
-        *code = 4;
-        return false;
-    }
-
-    if (!job.setTarget(params["target"].GetString())) {
-        *code = 5;
-        return false;
-    }
-
-    if (params.HasMember("algo")) {
-        job.setAlgorithm(params["algo"].GetString());
-    }
-
-    if (params.HasMember("variant")) {
-        const rapidjson::Value &variant = params["variant"];
-
-        if (variant.IsInt()) {
-            job.setVariant(variant.GetInt());
+    if (m_daemon) {
+        if (!job.setBlob(params["blockhashing_blob"].GetString())) {
+            *code = 4;
+            return false;
         }
-        else if (variant.IsString()){
-            job.setVariant(variant.GetString());
+        if (!job.setDiff(params["difficulty"].GetString())) {
+            *code = 5;
+            return false;
+        }
+        if (!job.setDaemonBlob(params["blocktemplate_blob"].GetString())) {
+            *code = 4;
+            return false;
+        }
+        if (params.HasMember("prev_hash")) {
+            strncpy(m_prevHash, params["prev_hash"].GetString(), 64);
+            m_prevHash[64] = '\0';
+        }
+
+    } else {
+        if (!job.setId(params["job_id"].GetString())) {
+            *code = 3;
+            return false;
+        }
+
+        if (!job.setBlob(params["blob"].GetString())) {
+            *code = 4;
+            return false;
+        }
+
+        if (!job.setTarget(params["target"].GetString())) {
+            *code = 5;
+            return false;
+        }
+
+        if (params.HasMember("algo")) {
+            job.setAlgorithm(params["algo"].GetString());
+        }
+
+        if (params.HasMember("variant")) {
+            const rapidjson::Value &variant = params["variant"];
+
+            if (variant.IsInt()) {
+                job.setVariant(variant.GetInt());
+            }
+            else if (variant.IsString()){
+                job.setVariant(variant.GetString());
+            }
         }
     }
 
@@ -364,6 +393,8 @@ bool Client::parseJob(const rapidjson::Value &params, int *code)
 
         if (variant.IsUint64()) {
             job.setHeight(variant.GetUint64());
+            if (m_daemon)
+                m_height = job.height();
         }
     }
 
@@ -523,11 +554,15 @@ int64_t Client::send(const rapidjson::Document &doc)
 
 int64_t Client::send(size_t size)
 {
-    LOG_DEBUG("[%s] send (%d bytes): \"%s\"", m_pool.url(), size, m_sendBuf);
+    return send(m_sendBuf, size);
+}
 
+int64_t Client::send(char *cbuf, size_t size)
+{
+    LOG_DEBUG("[%s] send (%d bytes): \"%s\"", m_pool.url(), size, cbuf);
 #   ifndef XMRIG_NO_TLS
     if (isTLS()) {
-        if (!m_tls->send(m_sendBuf, size)) {
+        if (!m_tls->send(cbuf, size)) {
             return -1;
         }
     }
@@ -539,7 +574,7 @@ int64_t Client::send(size_t size)
             return -1;
         }
 
-        uv_buf_t buf = uv_buf_init(m_sendBuf, (unsigned int) size);
+        uv_buf_t buf = uv_buf_init(cbuf, (unsigned int) size);
 
         if (uv_try_write(m_stream, &buf, 1) < 0) {
             close();
@@ -550,7 +585,6 @@ int64_t Client::send(size_t size)
     m_expire = uv_now(uv_default_loop()) + kResponseTimeout;
     return m_sequence++;
 }
-
 
 void Client::connect(const std::vector<addrinfo*> &ipv4, const std::vector<addrinfo*> &ipv6)
 {
@@ -614,42 +648,48 @@ void Client::login()
     using namespace rapidjson;
     m_results.clear();
 
-    Document doc(kObjectType);
-    auto &allocator = doc.GetAllocator();
-	Value params(kObjectType);
+    if (m_daemon) {
+        char cseq[33];
+        int clen = snprintf(cseq, sizeof(cseq), "%" PRId64, m_sequence);
+        send(snprintf(m_sendBuf, sizeof(m_sendBuf), "POST /json_rpc HTTP/1.0\r\nContent-Length: %zd\r\n\r\n"
+            "{\"id\": %s, \"method\": \"getblocktemplate\", \"params\": {\"reserve_size\": 8, \"wallet_address\": "
+            "\"%s\"}}", 91+clen+strlen(m_pool.user()), cseq, m_pool.user()));
+        m_daemonInterval = 32;
 
-    doc.AddMember("id",      1,       allocator);
-    doc.AddMember("jsonrpc", "2.0",   allocator);
+    } else {
+        Document doc(kObjectType);
+        auto &allocator = doc.GetAllocator();
+        Value params(kObjectType);
 
-	if (m_daemon) {
-	} else {
-		doc.AddMember("method",  "login", allocator);
+        doc.AddMember("id",      1,       allocator);
+        doc.AddMember("jsonrpc", "2.0",   allocator);
+        doc.AddMember("method",  "login", allocator);
 
-		params.AddMember("login", StringRef(m_pool.user()),     allocator);
-		params.AddMember("pass",  StringRef(m_pool.password()), allocator);
-		params.AddMember("agent", StringRef(m_agent),           allocator);
-	}
+        params.AddMember("login", StringRef(m_pool.user()),     allocator);
+        params.AddMember("pass",  StringRef(m_pool.password()), allocator);
+        params.AddMember("agent", StringRef(m_agent),           allocator);
 
-    if (m_pool.rigId()) {
-        params.AddMember("rigid", StringRef(m_pool.rigId()), allocator);
-    }
-
-#   ifdef XMRIG_PROXY_PROJECT
-    if (m_pool.algorithm().variant() != xmrig::VARIANT_AUTO)
-#   endif
-    {
-        Value algo(kArrayType);
-
-        for (const auto &a : m_pool.algorithms()) {
-            algo.PushBack(StringRef(a.shortName()), allocator);
+        if (m_pool.rigId()) {
+            params.AddMember("rigid", StringRef(m_pool.rigId()), allocator);
         }
 
-        params.AddMember("algo", algo, allocator);
+#   ifdef XMRIG_PROXY_PROJECT
+        if (m_pool.algorithm().variant() != xmrig::VARIANT_AUTO)
+#   endif
+        {
+            Value algo(kArrayType);
+
+            for (const auto &a : m_pool.algorithms()) {
+                algo.PushBack(StringRef(a.shortName()), allocator);
+            }
+
+            params.AddMember("algo", algo, allocator);
+        }
+
+        doc.AddMember("params", params, allocator);
+
+        send(doc);
     }
-
-    doc.AddMember("params", params, allocator);
-
-    send(doc);
 }
 
 
@@ -699,6 +739,22 @@ void Client::parse(char *line, size_t len)
 
     if (!doc.IsObject()) {
         return;
+    }
+
+    if (m_daemon) {
+        /* height check */
+        if (doc.HasMember("height")) {
+            const char *hash = NULL;
+            int64_t height = doc["height"].GetInt64();
+            if (doc.HasMember("hash"))
+                hash = doc["hash"].GetString();
+            if (height != m_height - 1 ||
+                (hash != NULL && strcmp(hash, m_prevHash))) {
+                /* chain has changed, get a new job */
+                login();
+            }
+            return;
+        }
     }
 
     const rapidjson::Value &id = doc["id"];
@@ -790,9 +846,27 @@ void Client::parseResponse(int64_t id, const rapidjson::Value &result, const rap
         return;
     }
 
+    int code = -1;
+    if (m_daemon) {
+        if (result.HasMember("difficulty")) {
+            /* new job */
+            if (!parseJob(result, &code))
+                goto loginFail;
+            if (id == 1) {
+                m_failures = 0;
+                m_listener->onLoginSuccess(this);
+            }
+            m_listener->onJobReceived(this, m_job);
+            m_daemonPoll = uv_now(uv_default_loop()) + (m_daemonInterval * 1000);
+            if (m_daemonInterval > 1)
+                m_daemonInterval >>= 1;
+            return;
+        }
+    }
+
     if (id == 1) {
-        int code = -1;
         if (!parseLogin(result, &code)) {
+loginFail:
             if (!isQuiet()) {
                 LOG_ERR("[%s] login error code: %d", m_pool.url(), code);
             }
@@ -828,13 +902,38 @@ void Client::read()
     char* start = m_recvBuf.base;
     size_t remaining = m_recvBufPos;
 
-    while ((end = static_cast<char*>(memchr(start, '\n', remaining))) != nullptr) {
-        end++;
-        size_t len = end - start;
-        parse(start, len);
+    if (m_daemon) {
+        char *l, *crlf;
+        int hlen, rlen;
 
-        remaining -= len;
-        start = end;
+        start[remaining] = '\0';
+        l = strstr(start, "Content-Length: ");
+        if (!l)
+            return;
+        crlf = strstr(l, "\r\n\r\n");
+        if (!crlf)
+            return;
+        hlen = crlf - start + 4;
+        if (sscanf(l + sizeof("Content-Length:"), "%d", &rlen) != 1) {
+            /* fail */
+            m_recvBufPos = 0;
+            return;
+        }
+        /* message not yet complete */
+        if (remaining-hlen < (unsigned)rlen)
+            return;
+        parse(crlf+4, rlen);
+        start = crlf+4 + rlen;
+        remaining -= hlen + rlen;
+    } else {
+        while ((end = static_cast<char*>(memchr(start, '\n', remaining))) != nullptr) {
+            end++;
+            size_t len = end - start;
+            parse(start, len);
+
+            remaining -= len;
+            start = end;
+        }
     }
 
     if (remaining == 0) {

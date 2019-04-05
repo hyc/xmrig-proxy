@@ -109,6 +109,7 @@ private:
     int resolve(const char *host);
     int64_t send(const rapidjson::Document &doc);
     int64_t send(size_t size);
+    int64_t send(char *buf, size_t size);
     void connect(const std::vector<addrinfo*> &ipv4, const std::vector<addrinfo*> &ipv6);
     void connect(sockaddr *addr);
     void handshake();
@@ -138,17 +139,20 @@ private:
     bool m_ipv6;
     bool m_nicehash;
     bool m_quiet;
-	bool m_daemon;
+    bool m_daemon;
     char m_buf[kInputBufferSize];
     char m_ip[46];
     char m_sendBuf[2048];
+    char m_prevHash[65];
     const char *m_agent;
     IClientListener *m_listener;
     int m_extensions;
     int m_id;
     int m_retries;
     int m_retryPause;
+    int m_daemonInterval;
     int64_t m_failures;
+    int64_t m_height;
     Job m_job;
     Pool m_pool;
     size_t m_recvBufPos;
@@ -158,6 +162,7 @@ private:
     uint64_t m_expire;
     uint64_t m_jobs;
     uint64_t m_keepAlive;
+    uint64_t m_daemonPoll;
     uintptr_t m_key;
     uv_buf_t m_recvBuf;
     uv_getaddrinfo_t m_resolver;

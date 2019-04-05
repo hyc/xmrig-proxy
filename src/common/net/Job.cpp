@@ -26,6 +26,8 @@
 
 #include <assert.h>
 #include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 
 #include "common/net/Job.h"
@@ -67,7 +69,8 @@ Job::Job() :
     m_diff(0),
     m_target(0),
     m_blob(),
-    m_height(0)
+    m_height(0),
+    m_daemonBlob(NULL)
 {
 }
 
@@ -83,13 +86,16 @@ Job::Job(int poolId, bool nicehash, const xmrig::Algorithm &algorithm, const xmr
     m_blob(),
     m_height(0),
     m_algorithm(algorithm),
-    m_clientId(clientId)
+    m_clientId(clientId),
+    m_daemonBlob(NULL)
 {
 }
 
 
 Job::~Job()
 {
+    if (m_daemonBlob != NULL)
+        free(m_daemonBlob);
 }
 
 
@@ -98,6 +104,29 @@ bool Job::isEqual(const Job &other) const
     return m_id == other.m_id && m_clientId == other.m_clientId && memcmp(m_blob, other.m_blob, sizeof(m_blob)) == 0;
 }
 
+
+bool Job::setDaemonBlob(const char *blob)
+{
+    size_t bloblen, clenlen, datalen;
+    char cdata[24];
+    if (!blob) {
+        return false;
+    }
+    if (m_daemonBlob != NULL)
+        free(m_daemonBlob);
+    bloblen = strlen(blob);
+    datalen = bloblen + sizeof("{\"method\": \"submitblock\", \"params\": [\"\"]}");
+    clenlen = snprintf(cdata, sizeof(cdata), "%zd", datalen);
+    m_daemonBlobSize = datalen + clenlen + sizeof("POST /json_rpc HTTP/1.0\r\nContent-Length:\r\n\r\n");
+    m_daemonBlob = (char *)malloc(m_daemonBlobSize);
+    if (m_daemonBlob != NULL) {
+        sprintf(m_daemonBlob, "POST /json_rpc HTTP/1.0\r\nContent-Length: %zd\r\n\r\n"
+            "{\"method\": \"submitblock\", \"params\": [\"%s\"]}", datalen, blob);
+        m_daemonNonce = m_daemonBlob + sizeof("POST /json_rpc HTTP/1.0\r\nContent-Length:\r\n\r\n") +
+            sizeof("{\"method\": \"submitblock\", \"params\": [") + 78;
+    }
+    return m_daemonBlob != NULL;
+}
 
 bool Job::setBlob(const char *blob)
 {
@@ -147,6 +176,22 @@ bool Job::setBlob(const char *blob)
     return true;
 }
 
+
+bool Job::setDiff(const char *diff)
+{
+    uint64_t bdiff;
+    char *endptr;
+    if (!diff) {
+        return false;
+    }
+    bdiff = strtoull(diff, &endptr, 10);
+    if (*endptr)
+        return false;
+    m_diff = bdiff;
+    m_target = toDiff(m_diff);
+
+    return true;
+}
 
 bool Job::setTarget(const char *target)
 {
